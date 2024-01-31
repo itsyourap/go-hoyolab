@@ -16,11 +16,10 @@ import (
 )
 
 // at *day 1* your got [GSI] x1, [HSR] x1, [HI3] x1
-var configExt string = "yaml"
-var logExt string = "log"
-var configPath string = ""
-var logPath string = ""
-var logfile *os.File
+var configExt = "yaml"
+var logExt = "log"
+var configPath = ""
+var logPath = ""
 
 func init() {
 	err := goenv.Load()

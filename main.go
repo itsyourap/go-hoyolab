@@ -1,24 +1,21 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"hoyolab/act"
 	"log"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 
-	"hoyolab/act"
-
-	"github.com/dvgamerr/go-kooky"
-	"github.com/dvgamerr/go-kooky/browser/chrome"
 	"github.com/go-resty/resty/v2"
 	"github.com/tmilewski/goenv"
 )
 
-// at *day 1* your got [GSI]asdasd x1, [HSR]asdasd x1, [HI3]asdasd x1
+// at *day 1* your got [GSI] x1, [HSR] x1, [HI3] x1
 var configExt string = "yaml"
 var logExt string = "log"
 var configPath string = ""
@@ -61,130 +58,99 @@ func init() {
 }
 
 func main() {
-	if logfile != nil {
-		defer logfile.Close()
-	}
-
 	hoyo := GenerateDefaultConfig()
 	if err := hoyo.ReadHoyoConfig(configPath); err != nil {
 		log.Fatal(err)
 	}
-
-	cookieStore := kooky.FindAllCookieStores()
-	log.Printf("Browser total %d sessions", len(cookieStore))
-
 	var notifyMessage []string
-	for _, store := range cookieStore {
-		if _, err := os.Stat(store.FilePath()); os.IsNotExist(err) {
-			continue
-		}
 
-		for _, profile := range hoyo.Browser {
-			if len(profile.Name) > 0 && (store.Browser() != profile.Browser || !ContainsStrings(profile.Name, store.Profile())) {
-				continue
+	cookiesStr := os.Getenv("HOYOLAB_COOKIES")
+
+	cookies, err := convertStrCookies(cookiesStr)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, hoyoAct := range hoyo.Daily {
+		hoyoAct.SetCookie(cookies)
+	}
+
+	for _, profile := range hoyo.Browser {
+		var resAcc *act.ActUser
+		var err error
+		hoyo.Client = resty.New()
+
+		var getDaySign int32 = -1
+		var getAward []string
+		for i := 0; i < len(hoyo.Daily); i++ {
+			hoyoAct := hoyo.Daily[i]
+			hoyoAct.UserAgent = profile.UserAgent
+
+			if resAcc == nil {
+				resAcc, err = hoyoAct.GetAccountUserInfo(hoyo)
+				if err != nil {
+					log.Printf("%s::GetUserInfo    : %v", hoyoAct.Label, err)
+					continue
+				}
+				log.Printf("%s::GetUserInfo    : Hi, '%s'", hoyoAct.Label, resAcc.UserInfo.NickName)
 			}
-			log.Printf(`Profile %s::"%s"`, store.Browser(), store.Profile())
 
-			cookies, err := chrome.CookieJar(store.FilePath())
+			resAward, err := hoyoAct.GetMonthAward(hoyo)
 			if err != nil {
-				log.Println(err)
+				log.Printf("%s::GetMonthAward  : %v", hoyoAct.Label, err)
 				continue
 			}
 
-			if !hoyo.IsCookieToken(cookies) {
-				log.Println("Session is empty, please login hoyolab.com.")
+			resInfo, err := hoyoAct.GetCheckInInfo(hoyo)
+			if err != nil {
+				log.Printf("%s::GetCheckInInfo :%v", hoyoAct.Label, err)
 				continue
 			}
 
-			var resAcc *act.ActUser
-			hoyo.Client = resty.New()
-
-			var getDaySign int32 = -1
-			var getAward []string = []string{}
-			for i := 0; i < len(hoyo.Daily); i++ {
-				act := hoyo.Daily[i]
-				act.UserAgent = profile.UserAgent
-
-				if resAcc == nil {
-					resAcc, err = act.GetAccountUserInfo(hoyo)
-					if err != nil {
-						log.Printf("%s::GetUserInfo    : %v", act.Label, err)
-						continue
-					}
-					log.Printf("%s::GetUserInfo    : Hi, '%s'", act.Label, resAcc.UserInfo.NickName)
-				}
-
-				resAward, err := act.GetMonthAward(hoyo)
-				if err != nil {
-					log.Printf("%s::GetMonthAward  : %v", act.Label, err)
-					continue
-				}
-
-				resInfo, err := act.GetCheckInInfo(hoyo)
-				if err != nil {
-					log.Printf("%s::GetCheckInInfo :%v", act.Label, err)
-					continue
-				}
-
-				log.Printf("%s::GetCheckInInfo : Checked in for %d days", act.Label, resInfo.TotalSignDay)
-				if resInfo.IsSign {
-					log.Printf("%s::DailySignIn    : Claimed %s", act.Label, resInfo.Today)
-					continue
-				}
-
-				isRisk, err := act.DailySignIn(hoyo)
-				if err != nil {
-					log.Printf("%s::DailySignIn    : %v", act.Label, err)
-					continue
-				}
-				if getDaySign < 0 {
-					getDaySign = resInfo.TotalSignDay + 1
-				}
-
-				award := resAward.Awards[resInfo.TotalSignDay+1]
-				log.Printf("%s::GetMonthAward  : Today's received %s x%d", act.Label, award.Name, award.Count)
-
-				if hoyo.Notify.Mini {
-					if isRisk {
-						getAward = append(getAward, fmt.Sprintf("Challenge captcha (%s)", act.Label))
-					} else {
-						getAward = append(getAward, fmt.Sprintf("*%s x%d* (%s)", award.Name, award.Count, act.Label))
-					}
-				} else {
-					if isRisk {
-						getAward = append(getAward, fmt.Sprintf("*[%s]* at day %d challenge captcha", act.Label, resInfo.TotalSignDay+1))
-					} else {
-						getAward = append(getAward, fmt.Sprintf("*[%s]* at day %d received %s x%d", act.Label, resInfo.TotalSignDay+1, award.Name, award.Count))
-					}
-				}
+			log.Printf("%s::GetCheckInInfo : Checked in for %d days", hoyoAct.Label, resInfo.TotalSignDay)
+			if resInfo.IsSign {
+				log.Printf("%s::DailySignIn    : Claimed %s", hoyoAct.Label, resInfo.Today)
+				continue
 			}
-			if len(getAward) > 0 {
-				if len(hoyo.Browser) > 1 {
-					notifyMessage = append(notifyMessage, "\n")
-				}
 
-				if hoyo.Notify.Mini {
-					notifyMessage = append(notifyMessage, fmt.Sprintf("%s, at day %d your got %s", resAcc.UserInfo.NickName, getDaySign, strings.Join(getAward, ", ")))
+			isRisk, err := hoyoAct.DailySignIn(hoyo)
+			if err != nil {
+				log.Printf("%s::DailySignIn    : %v", hoyoAct.Label, err)
+				continue
+			}
+			if getDaySign < 0 {
+				getDaySign = resInfo.TotalSignDay + 1
+			}
+
+			award := resAward.Awards[resInfo.TotalSignDay+1]
+			log.Printf("%s::GetMonthAward  : Today's received %s x%d", hoyoAct.Label, award.Name, award.Count)
+
+			if hoyo.Notify.Mini {
+				if isRisk {
+					getAward = append(getAward, fmt.Sprintf("Challenge captcha (%s)", hoyoAct.Label))
 				} else {
-					notifyMessage = append(notifyMessage, fmt.Sprintf("\nHi, %s Checked in for %d days.\n%s", resAcc.UserInfo.NickName, 1, strings.Join(getAward, "\n")))
+					getAward = append(getAward, fmt.Sprintf("*%s x%d* (%s)", award.Name, award.Count, hoyoAct.Label))
+				}
+			} else {
+				if isRisk {
+					getAward = append(getAward, fmt.Sprintf("*[%s]* at day %d challenge captcha", hoyoAct.Label, resInfo.TotalSignDay+1))
+				} else {
+					getAward = append(getAward, fmt.Sprintf("*[%s]* at day %d received %s x%d", hoyoAct.Label, resInfo.TotalSignDay+1, award.Name, award.Count))
 				}
 			}
 		}
-	}
+		if len(getAward) > 0 {
+			if len(hoyo.Browser) > 1 {
+				notifyMessage = append(notifyMessage, "\n")
+			}
 
-	if err := hoyo.NotifyMessage(strings.Join(notifyMessage, "\n")); err != nil {
-		log.Printf("NotifyMessage  : %v", err)
-	}
-}
-
-func ContainsStrings(a []string, x string) bool {
-	sort.Strings(a)
-	for _, v := range a {
-		if v == x {
-			return true
+			if hoyo.Notify.Mini {
+				notifyMessage = append(notifyMessage, fmt.Sprintf("%s, at day %d your got %s", resAcc.UserInfo.NickName, getDaySign, strings.Join(getAward, ", ")))
+			} else {
+				notifyMessage = append(notifyMessage, fmt.Sprintf("\nHi, %s Checked in for %d days.\n%s", resAcc.UserInfo.NickName, 1, strings.Join(getAward, "\n")))
+			}
 		}
 	}
-	return false
 }
 
 func GenerateDefaultConfig() *act.Hoyolab {
@@ -256,4 +222,14 @@ func GenerateDefaultConfig() *act.Hoyolab {
 			apiHonkaiImpact,
 		},
 	}
+}
+
+func convertStrCookies(strCookies string) ([]*http.Cookie, error) {
+	rawRequest := fmt.Sprintf("GET / HTTP/1.0\r\nCookie: %s\r\n\r\n", strCookies)
+	req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(rawRequest)))
+
+	if err != nil {
+		return nil, err
+	}
+	return req.Cookies(), nil
 }

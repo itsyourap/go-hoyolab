@@ -29,12 +29,6 @@ type DailyHoyolab struct {
 	CookieJar []*http.Cookie `yaml:"cookie,omitempty"`
 }
 
-type BrowserProfile struct {
-	Browser   string   `yaml:"browser"`
-	Name      []string `yaml:"name"`
-	UserAgent string   `yaml:"userAgent"`
-}
-
 type LineNotify struct {
 	Token string `yaml:"token,omitempty"`
 	// current
@@ -43,12 +37,18 @@ type LineNotify struct {
 	Mini       bool   `yaml:"mini"`
 }
 
+type Cookies struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
+}
+
 type Hoyolab struct {
-	Client  *resty.Client    `yaml:"client,omitempty"`
-	Notify  LineNotify       `yaml:"notify"`
-	Delay   int32            `yaml:"delay"`
-	Browser []BrowserProfile `yaml:"profile"`
-	Daily   []*DailyHoyolab  `yaml:"config"`
+	Client    *resty.Client   `yaml:"client,omitempty"`
+	Notify    LineNotify      `yaml:"notify"`
+	Delay     int32           `yaml:"delay"`
+	UserAgent string          `yaml:"userAgent"`
+	Daily     []*DailyHoyolab `yaml:"config"`
+	Cookies   []Cookies       `yaml:"cookies,omitempty"`
 }
 
 const DEBUG string = "DEBUG"
@@ -98,7 +98,8 @@ func (hoyo *Hoyolab) ReadHoyoConfig(configPath string) error {
 			hoyo.Notify.Token = ""
 		}
 		hoyo.Delay = readHoyo.Delay
-		hoyo.Browser = readHoyo.Browser
+		hoyo.Cookies = readHoyo.Cookies
+		hoyo.UserAgent = readHoyo.UserAgent
 		hoyo.Daily = readHoyo.Daily
 	}
 	hoyo.WriteHoyoConfig(configPath)
